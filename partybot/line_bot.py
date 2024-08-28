@@ -1,7 +1,12 @@
+import asyncio
+import datetime
 import logging
-import fastapi
 
-from linebot.v3.webhook import WebhookParser, WebhookHandler
+from partybot.line_bot_flex_msg import *
+
+import fastapi
+from google.cloud import firestore
+from linebot.v3.webhook import WebhookParser
 from linebot.v3.messaging import (
     ApiException,
     AsyncApiClient,
@@ -9,118 +14,41 @@ from linebot.v3.messaging import (
     Configuration,
     FlexMessage,
     ReplyMessageRequest,
-    TextMessage
+    TextMessage,
 )
 from linebot.v3.exceptions import (
     InvalidSignatureError
 )
 from linebot.v3.webhooks import (
+    ImageMessageContent,
+    FollowEvent,
+    PostbackEvent,
     MessageEvent,
-    TextMessageContent
+    TextMessageContent,
+    VideoMessageContent,
 )
 
-# https://github.com/line/line-bot-sdk-python/blob/master/examples/flask-kitchensink/app.py
-WEDDING_INFO_ALT_TEXT = '''婚禮資訊
+_WEDDING_INFO_ALT_TEXT = '''婚禮資訊
 2024/12/08 孫立人將軍官邸
 10:30 雞尾酒派對
 11:00 戶外證婚
 12:18 喜宴開始
 '''
 
-FLEX_MSG_WEDDING_INFO = {
-  "type": "bubble",
-  "body": {
-    "type": "box",
-    "layout": "vertical",
-    "contents": [
-      {
-        "type": "box",
-        "layout": "horizontal",
-        "contents": [
-          {
-            "type": "text",
-            "text": "日期",
-            "flex": 1
-          },
-          {
-            "type": "text",
-            "text": "📅 2024/12/08 (日)",
-            "flex": 2
-          }
-        ]
-      },
-      {
-        "type": "box",
-        "layout": "horizontal",
-        "contents": [
-          {
-            "type": "text",
-            "text": "地點",
-            "flex": 1,
-          },
-          {
-            "type": "text",
-            "text": "📍 孫立人將軍官邸",
-            "flex": 2,
-          }
-        ]
-      },
-      {
-        "type": "box",
-        "layout": "horizontal",
-        "contents": [
-          {
-            "type": "text",
-            "text": "時間",
-            "flex": 1
-          },
-          {
-            "type": "box",
-            "layout": "vertical",
-            "contents": [
-              {
-                "type": "text",
-                "text": "🍸 10:30 雞尾酒派對",
-              },
-              {
-                "type": "text",
-                "text": "💍 11:00 戶外證婚",
-              },
-              {
-                "type": "text",
-                "text": "🍽️ 12:18 喜宴開始",
-              }
-            ],
-            "flex": 2,
-          }
-        ]
-      },
-      {
-        "type": "box",
-        "layout": "horizontal",
-        "contents": [
-          {
-            "type": "button",
-            "action": {
-              "type": "uri",
-              "label": "邀請函",
-              "uri": "https://forms.gle/pbjZzYWJsP6EfHEe9"
-            }
-          },
-          {
-            "type": "button",
-            "action": {
-              "type": "uri",
-              "label": "地圖",
-              "uri": "https://maps.app.goo.gl/nB27agtpkfzGtzwT9"
-            }
-          }
-        ]
-      }
-    ],
-    "spacing": "xl"
-  }
-}
+class FirestoreClient:
+    def __init__(self, project_id):
+        self._client = firestore.AsyncClient(project=project_id)
+        self._tasks = set()
+
+    def write_doc(self, collection, document, value):
+        doc = self._client.collection(collection).document(document)
+        task = asyncio.create_task(doc.set(value))
+        # Add task to the set. This creates a strong reference.
+        self._tasks.add(task)
+        # To prevent keeping references to finished tasks forever,
+        # make each task remove its own reference from the set after
+        # completion:
+        task.add_done_callback(self._tasks.discard)
 
 
 class LineBot:
@@ -131,6 +59,7 @@ class LineBot:
             '座位查詢': self._where_is_my_seat,
             '婚禮資訊': self._share_wedding_info,
         }
+        self._firestore_client = FirestoreClient('stimim-wedding-bot')
 
     @property
     def _line_bot_api(self):
@@ -138,15 +67,66 @@ class LineBot:
             async_api_client = AsyncApiClient(self._configuration)
             self._line_bot_api_cache = AsyncMessagingApi(async_api_client)
         return self._line_bot_api_cache
-
+    
     async def handle_event(self, event):
+        handler = self.__get_handler(event)
+        if handler is not None:
+            return await handler(event)
+        
+    def __get_handler(self, event):
         match event:
             case MessageEvent():
                 match event.message:
+                    case ImageMessageContent():
+                        return self._handle_image_message
                     case TextMessageContent():
-                        return await self.handle_text_message(event)
+                        return self._handle_text_message
+                    case VideoMessageContent():
+                        return self._handle_video_message
+            case FollowEvent():
+                return self._handle_follow_event
+            case PostbackEvent():
+                pass
+        return None
+    
+    async def _handle_follow_event(self, event: MessageEvent):
+        await self._line_bot_api.reply_message(
+            ReplyMessageRequest(
+                reply_token=event.reply_token,
+                messages=[
+                    FlexMessage.from_dict({
+                        'type': 'flex',
+                        'altText': '感謝將我們的機器人加入好友！',
+                        'contents': FLEX_MSG_GREETING,
+                    })
+                ]
+            )
+        )
 
-    async def handle_text_message(self, event: MessageEvent):
+    async def _handle_image_message(self, event: MessageEvent):
+        logging.info('_handle_image_message: %r', event.message)
+        if event.message.content_provider.type != 'line':
+            return
+        self._firestore_client.write_doc(
+            'image_message',
+            event.message.id,
+            {
+                'image_set': event.message.image_set,
+                'timestamp': datetime.datetime.now().timestamp(),
+            })
+
+    async def _handle_video_message(self, event: MessageEvent):
+        logging.info('_handle_video_message: %r', event.message)
+        if event.message.content_provider.type != 'line':
+            return
+        self._firestore_client.write_doc(
+            'video_message',
+            event.message.id,
+            {
+                'timestamp': datetime.datetime.now().timestamp(),
+            })
+
+    async def _handle_text_message(self, event: MessageEvent):
         text = event.message.text
         if text[0] != '!':
             return
@@ -173,7 +153,7 @@ class LineBot:
                 messages=[
                     FlexMessage.from_dict({
                         'type': 'flex',
-                        'altText': WEDDING_INFO_ALT_TEXT,
+                        'altText': _WEDDING_INFO_ALT_TEXT,
                         'contents': FLEX_MSG_WEDDING_INFO
                     })
                 ]

@@ -3,4 +3,5 @@ fastapi
 uvicorn[standard]
 gunicorn
 google-cloud-secret-manager
+google-cloud-firestore
 uvicorn-worker

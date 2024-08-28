@@ -1,9 +1,12 @@
+import logging
 import sys
 
 from fastapi import FastAPI
 
 from partybot import line_bot
 from partybot import configs
+
+logging.basicConfig(level=logging.INFO)
 
 bot_configs = configs.PartyBotConfig()
 
