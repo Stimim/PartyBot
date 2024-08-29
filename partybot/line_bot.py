@@ -58,6 +58,7 @@ class LineBot:
         self._cmds = {
             '座位查詢': self._where_is_my_seat,
             '婚禮資訊': self._share_wedding_info,
+            '上傳照片': self._upload_photo,
         }
         self._firestore_client = FirestoreClient('stimim-wedding-bot')
 
@@ -178,6 +179,20 @@ class LineBot:
                 reply_token=event.reply_token,
                 messages=[
                     TextMessage(text=f'{name} 座位表製作中，敬請期待.....'),
+                ]
+            )
+        )
+
+    async def _upload_photo(self, event: MessageEvent, cmd: str, params: str):
+        del cmd
+        del params
+        return await self._line_bot_api.reply_message(
+            ReplyMessageRequest(
+                reply_token=event.reply_token,
+                messages=[
+                    TextMessage(text=(
+                        '感謝您幫忙紀錄我們的婚禮，'
+                        '麻煩將照片或影片直接上傳到這個 LINE 對話中')),
                 ]
             )
         )
