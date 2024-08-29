@@ -61,6 +61,7 @@ class LineBot:
             '上傳照片': self._upload_photo,
         }
         self._firestore_client = FirestoreClient('stimim-wedding-bot')
+        self._deferred_tasks = set()
 
     @property
     def _line_bot_api(self):
@@ -69,10 +70,20 @@ class LineBot:
             self._line_bot_api_cache = AsyncMessagingApi(async_api_client)
         return self._line_bot_api_cache
 
-    async def handle_event(self, event):
+    def handle_event(self, event):
         handler = self.__get_handler(event)
         if handler is not None:
-            return await handler(event)
+            self._defer_task(handler(event))
+
+    def _defer_task(self, future):
+        task = asyncio.create_task(future)
+        self._deferred_tasks.add(task)
+        task.add_done_callback(self._on_task_done)
+
+    def _on_task_done(self, task):
+        if e := task.exception():
+            logging.error('Task failed: ', exc_info=e)
+        self._deferred_tasks.discard(task)
 
     def __get_handler(self, event):
         match event:
@@ -233,7 +244,7 @@ def setup(app: fastapi.FastAPI, channel_secret: str, channel_access_token: str):
             raise fastapi.HTTPException(status_code=400, detail="Invalid signature")
 
         for event in events:
-            await line_bot.handle_event(event)
+            line_bot.handle_event(event)
 
         return 'OK'
 
