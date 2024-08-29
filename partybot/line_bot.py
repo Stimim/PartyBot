@@ -68,12 +68,12 @@ class LineBot:
             async_api_client = AsyncApiClient(self._configuration)
             self._line_bot_api_cache = AsyncMessagingApi(async_api_client)
         return self._line_bot_api_cache
-    
+
     async def handle_event(self, event):
         handler = self.__get_handler(event)
         if handler is not None:
             return await handler(event)
-        
+
     def __get_handler(self, event):
         match event:
             case MessageEvent():
@@ -89,8 +89,14 @@ class LineBot:
             case PostbackEvent():
                 pass
         return None
-    
+
     async def _handle_follow_event(self, event: MessageEvent):
+        if event.source and event.source.user_id:
+            self._firestore_client.write_doc(
+                'known_users',
+                event.source.user_id,
+                {}
+            )
         await self._line_bot_api.reply_message(
             ReplyMessageRequest(
                 reply_token=event.reply_token,
@@ -108,24 +114,31 @@ class LineBot:
         logging.info('_handle_image_message: %r', event.message)
         if event.message.content_provider.type != 'line':
             return
+
+        image_data = {
+            'image_set': event.message.image_set,
+            'timestamp': datetime.datetime.now().timestamp(),
+        }
+        if event.source and event.source.user_id:
+            image_data['user_id'] = event.source.user_id
         self._firestore_client.write_doc(
             'image_message',
             event.message.id,
-            {
-                'image_set': event.message.image_set,
-                'timestamp': datetime.datetime.now().timestamp(),
-            })
+            image_data)
 
     async def _handle_video_message(self, event: MessageEvent):
         logging.info('_handle_video_message: %r', event.message)
         if event.message.content_provider.type != 'line':
             return
+        video_data = {
+            'timestamp': datetime.datetime.now().timestamp(),
+        }
+        if event.source and event.source.user_id:
+            video_data['user_id'] = event.source.user_id
         self._firestore_client.write_doc(
             'video_message',
             event.message.id,
-            {
-                'timestamp': datetime.datetime.now().timestamp(),
-            })
+            video_data)
 
     async def _handle_text_message(self, event: MessageEvent):
         text = event.message.text
