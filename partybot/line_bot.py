@@ -56,9 +56,10 @@ class LineBot:
         self._configuration = configuration
         self._line_bot_api_cache = None
         self._cmds = {
-            '座位查詢': self._where_is_my_seat,
+            '座位查詢': self._lookup_my_seat,
             '婚禮資訊': self._share_wedding_info,
             '上傳照片': self._upload_photo,
+            '心情留言': self._leave_a_message,
         }
         self._firestore_client = FirestoreClient('stimim-wedding-bot')
         self._deferred_tasks = set()
@@ -153,7 +154,7 @@ class LineBot:
 
     async def _handle_text_message(self, event: MessageEvent):
         text = event.message.text
-        if text[0] != '!':
+        if text[0] != '!' and text[0] != '！':
             return
 
         cmd, _, params = text.partition(' ')
@@ -185,7 +186,7 @@ class LineBot:
             )
         )
 
-    async def _where_is_my_seat(self, event: MessageEvent, cmd: str, params: str):
+    async def _lookup_my_seat(self, event: MessageEvent, cmd: str, params: str):
         if not params:
             return await self._line_bot_api.reply_message(
                 ReplyMessageRequest(
@@ -217,6 +218,37 @@ class LineBot:
                     TextMessage(text=(
                         '感謝您幫忙紀錄我們的婚禮，'
                         '麻煩將照片或影片直接上傳到這個 LINE 對話中')),
+                ]
+            )
+        )
+
+    async def _leave_a_message(self, event: MessageEvent, cmd: str, params: str):
+        if not params:
+            return await self._line_bot_api.reply_message(
+                ReplyMessageRequest(
+                    reply_token=event.reply_token,
+                    messages=[
+                        TextMessage(text='請使用 !心情留言 ... 來留言，例如：'),
+                        TextMessage(text='!心情留言 新娘好漂亮!'),
+                    ]
+                )
+            )
+        message_data = {
+            'text': params,
+            'timestamp': datetime.datetime.now().timestamp(),
+        }
+        if event.source and event.source.user_id:
+            message_data['user_id'] = event.source.user_id
+
+        self._firestore_client.write_doc(
+            'guestbook',
+            event.message.id,
+            message_data)
+        return await self._line_bot_api.reply_message(
+            ReplyMessageRequest(
+                reply_token=event.reply_token,
+                messages=[
+                    TextMessage(text='感謝留言!'),
                 ]
             )
         )
